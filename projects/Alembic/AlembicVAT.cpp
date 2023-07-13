@@ -480,4 +480,110 @@ ZENDEFNODE(AlembicToDynamicRemeshVAT, {
   {"alembic", "primitive"},
 });
 
+struct PrimToSoftBodyVAT : public INode {
+    void apply() override {
+      std::shared_ptr<ListObject> frameList = get_input2<ListObject>("Primitives");
+      int frameStart = get_input2<int>("FrameStart");
+      int frameEnd = get_input2<int>("FrameEnd(not included)");
+      if (frameEnd < frameStart) {
+        std::swap(frameEnd, frameStart);
+      }
+      int frameNum = frameEnd - frameStart;
+      if (frameNum <= 0 || frameNum > frameList->get().size()) {
+        zeno::log_error("Invalid frame range: {} - {}", frameStart, frameEnd);
+        return;
+      }
+      std::vector<std::shared_ptr<PrimitiveObject>> Prims = frameList->get<PrimitiveObject>();
+
+      std::pair<vec3f, vec3f> bbox;
+      {
+        std::vector<vec3f> temp_bboxs;
+        for (auto& prim : Prims) {
+          zeno::primTriangulate(prim.get());
+          auto bbox = parallel_reduce_minmax(prim->verts.begin(), prim->verts.end());
+          temp_bboxs.push_back(bbox.first);
+          temp_bboxs.push_back(bbox.second);
+          set_output("primitive", prim); // Show last frame
+        }
+        bbox = parallel_reduce_minmax(temp_bboxs.begin(), temp_bboxs.end());
+      }
+
+      std::string writePath = get_input2<std::string>("outputPath");
+      size_t vatWidth;
+      int32_t rowsPerFrame;
+      size_t spaceToAlign;
+      size_t vatHeight;
+
+      std::vector<float> pos_f32;
+      std::vector<float> nrm_f32;
+      for (int32_t idx = frameStart; idx < frameEnd; ++idx) {
+        zeno::log_info("Processing frame {} / {} ...", idx + 1, frameEnd);
+        const int32_t frameIndex = idx - frameStart;
+        auto mergedPrim = safe_dynamic_cast<zeno::PrimitiveObject>(frameList->arr[frameIndex]);
+        // Save first frame mesh to obj
+        if (frameIndex == 0) {
+          vatWidth = std::min(mergedPrim->verts.size(), (size_t)8192);
+          rowsPerFrame = static_cast<int32_t>(std::ceil((float)mergedPrim->verts.size() / (float)vatWidth));
+          vatHeight = rowsPerFrame * frameNum;
+          spaceToAlign = vatWidth * rowsPerFrame - mergedPrim->verts.size();
+          std::string objPath = writePath + ".obj";
+          if (std::filesystem::exists(objPath)) {
+            std::filesystem::remove(objPath);
+          }
+          writeObjFile(mergedPrim, objPath.c_str(), frameNum, bbox);
+        }
+        // Save other frames to vat
+        // Position
+        for (auto& vert : mergedPrim->verts) {
+          auto vec = normalized_vec3f(vert, bbox.first, bbox.second);
+          pos_f32.push_back(vec[0]);
+          pos_f32.push_back(vec[1]);
+          pos_f32.push_back(vec[2]);
+        }
+        for (size_t idx = 0; idx < spaceToAlign; ++idx) {
+          pos_f32.push_back(0.0f);
+          pos_f32.push_back(0.0f);
+          pos_f32.push_back(0.0f);
+        }
+        if (!mergedPrim->has_attr("nrm")) {
+          zeno::primCalcNormal(mergedPrim.get());
+        }
+        auto& nrm_ref = mergedPrim->verts.attr<vec3f>("nrm");
+        for (auto& normal : nrm_ref) {
+          nrm_f32.push_back(normal[0]);
+          nrm_f32.push_back(normal[1]);
+          nrm_f32.push_back(normal[2]);
+        }
+        for (size_t idx = 0; idx < spaceToAlign; ++idx) {
+          nrm_f32.push_back(0.0f);
+          nrm_f32.push_back(0.0f);
+          nrm_f32.push_back(0.0f);
+        }
+      }
+      std::string posPath = writePath + "-position-texture.exr";
+      if (std::filesystem::exists(posPath)) {
+        std::filesystem::remove(posPath);
+      }
+      std::string nrmPath = writePath + "-normal-texture.exr";
+      if (std::filesystem::exists(nrmPath)) {
+        std::filesystem::remove(nrmPath);
+      }
+      SaveEXR(pos_f32.data(), vatWidth, vatHeight, posPath.c_str());
+      SaveEXR(nrm_f32.data(), vatWidth, vatHeight, nrmPath.c_str());
+    }
+};
+
+
+ZENDEFNODE(PrimToSoftBodyVAT, {
+  {
+    {"list", "Primitives"},
+    {"int", "FrameStart", "0"},
+    {"int", "FrameEnd(not included)", "1"},
+    {"writepath", "outputPath", ""},
+  },
+  { {"primitive"} },
+  {},
+  {"alembic", "primitive"},
+});
+
 }
