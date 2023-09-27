@@ -627,6 +627,7 @@ typedef struct
 }
 /*! @} */
 
+#define SAFE_DIV(lhs, rhs) (lhs / (rhs == 0 ? 0.00001 : rhs))
 
 
 /*! @name Utility Structs and Enums

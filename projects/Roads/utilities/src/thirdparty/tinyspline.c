@@ -1639,14 +1639,14 @@ ts_bspline_compute_rmf(const tsBSpline *spline,
 			c1 = ts_vec_dot(v1, v1, 3);
 
 			/* Compute r_{i}^{L} = R_{1} * r_{i}. */
-			rL[0] = (tsReal) 2.0 / c1;
+			rL[0] = (tsReal) SAFE_DIV(2.0, c1);
 			rL[1] = ts_vec_dot(v1, frames[i].normal, 3);
 			rL[2] = rL[0] * rL[1];
 			ts_vec_mul(v1, 3, rL[2], rL);
 			ts_vec_sub(frames[i].normal, rL, 3, rL);
 
 			/* Compute t_{i}^{L} = R_{1} * t_{i}. */
-			tL[0] = (tsReal) 2.0 / c1;
+			tL[0] = (tsReal) SAFE_DIV(2.0, c1);
 			tL[1] = ts_vec_dot(v1, frames[i].tangent, 3);
 			tL[2] = tL[0] * tL[1];
 			ts_vec_mul(v1, 3, tL[2], tL);
@@ -1665,7 +1665,7 @@ ts_bspline_compute_rmf(const tsBSpline *spline,
 			/* Compute r_{i+1} = R_{2} * r_{i}^{L}. */
 			ts_vec3_set(xc, /* xc is now the next normal */
 			            frames[i+1].normal, 3);
-			xc[0] = (tsReal) 2.0 / c2;
+			xc[0] = (tsReal) SAFE_DIV(2.0, c2);
 			xc[1] = ts_vec_dot(v2, rL, 3);
 			xc[2] = xc[0] * xc[1];
 			ts_vec_mul(v2, 3, xc[2], xc);

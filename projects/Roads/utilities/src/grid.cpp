@@ -15,6 +15,10 @@ double roads::EuclideanDistance(const Point2D &Point1, const Point2D &Point2) {
     return std::sqrt(std::pow(Point2.x() - Point1.x(), 2) + std::pow(Point2.y() - Point1.y(), 2));
 }
 
+Eigen::Vector3f ToEigen(const tinyspline::Vec3& v3) {
+    return Eigen::Vector3f(v3.x(), v3.y(), v3.z());
+}
+
 DynamicGrid<SlopePoint> roads::CalculateSlope(const DynamicGrid<HeightPoint> &InHeightField) {
     constexpr static std::array<int32_t, 4> XDirection4 = {-1, 0, 1, 0};
     constexpr static std::array<int32_t, 4> YDirection4 = {0, 1, 0, -1};
@@ -155,4 +159,144 @@ float spline::FindNearestPointSA(const Eigen::Vector3d &Point, const tinyspline:
     }
 
     return Distance(Point, Spline, BestT);
+}
+
+#define TINY2EIGEN_VECTOR3F(Name, Expr) auto Name##_ = Expr .resultVec3(); Eigen::Vector3f Name { Name##_.x(), Name##_.y(), Name##_.z() };
+
+Eigen::Vector3f CalculateTangent(Eigen::Vector3f& currentPosition, Eigen::Vector3f& nextPosition, Eigen::Vector3f& prevPosition, const tinyspline::BSpline& Spline, float& t, size_t& i, size_t& SampleCount){
+    TINY2EIGEN_VECTOR3F(PrevPosition, Spline.eval(std::clamp(t - 1.0f / static_cast<float>(SampleCount - 1), 0.f, 1.f)));
+    TINY2EIGEN_VECTOR3F(NextPosition, Spline.eval(std::clamp(t + 1.0f / static_cast<float>(SampleCount - 1), 0.f, 1.f)));
+    Eigen::Vector3f tangent = (NextPosition - PrevPosition).normalized();
+    return tangent;
+}
+
+void spline::BuildRoadMesh(
+    size_t SampleCount,
+    float RoadWidth,
+    float RoadHeight,
+    const tinyspline::BSpline& Spline,
+    std::vector<std::array<float, 3>> &OutVertices,
+    std::vector<std::array<int, 3>> &OutTriangles
+){
+    // Init previous tangent as direction to second control point
+    Eigen::Vector3f prevTangent;
+    TINY2EIGEN_VECTOR3F(p0, Spline.eval(0.0));
+    TINY2EIGEN_VECTOR3F(p1, Spline.eval(1.0/(SampleCount-1)));
+    prevTangent = (p1 - p0).normalized();
+
+    for (size_t i = 0; i < SampleCount; ++i) {
+        float t = static_cast<float>(i) / (SampleCount - 1);
+        TINY2EIGEN_VECTOR3F(position, Spline.eval(t));
+
+        // Step forward to estimate next tangent
+        TINY2EIGEN_VECTOR3F(p_next, Spline.eval(std::clamp(t + 1.0/(SampleCount-1), 0.0, 1.0)));
+        Eigen::Vector3f nextTangent = (p_next - position).normalized();
+
+        // The actual tangent is average of previous and next
+        Eigen::Vector3f tangent = (prevTangent + nextTangent).normalized();
+        prevTangent = tangent;
+
+        // Calculate normal and binormal
+        Eigen::Vector3f normal = Eigen::Vector3f::UnitY() - (Eigen::Vector3f::UnitY().dot(tangent))*tangent;
+        normal.normalize();
+
+        Eigen::Vector3f binormal = tangent.cross(normal);
+
+        // left (-) and right (+) vertices
+        Eigen::Vector3f roadLeft = position - binormal * RoadWidth * 0.5;
+        Eigen::Vector3f roadRight = position + binormal * RoadWidth * 0.5;
+
+        OutVertices.push_back({roadLeft[0], roadLeft[1], roadLeft[2]});
+        OutVertices.push_back({roadRight[0], roadRight[1], roadRight[2]});
+
+        // Connect vertices to quads unless it's the first pair
+        if (i != 0) {
+            int a = (i - 1) * 2;       // Index of first vertex of previous pair (left)
+            int b = a + 1;             // Index of second vertex of previous pair (right)
+            int c = i * 2;             // Index of first vertex of current pair (left)
+            int d = c + 1;             // Index of second vertex of current pair (right)
+
+            // Quad as two triangles: (a,b,c) and (c,b,d)
+            OutTriangles.push_back({a, b, c});
+            OutTriangles.push_back({c, b, d});
+        }
+    }
+}
+
+std::vector<tinyspline::real> GenerateSamples(int32_t SamplePoints) {
+    std::vector<tinyspline::real> res;
+    res.resize(SamplePoints);
+
+    for (int32_t i = 0; i < SamplePoints; ++i) {
+        res[i] = float(i) / float(SamplePoints);
+    }
+
+    return res;
+}
+
+ArrayList<spline::FrenetFrame> spline::SampleFrenetFrame(const tinyspline::BSpline &Spline, int32_t SamplePoints) {
+    ArrayList<spline::FrenetFrame> Result;
+
+    //float Step = 1.0f / float(SamplePoints);
+    std::vector<tinyspline::real> knots = Spline.equidistantKnotSeq(SamplePoints);
+    Result.resize(knots.size());
+
+    //tinyspline::BSpline derived = Spline.derive(1, -1e-6f);
+    //tinyspline::BSpline derived2 = Spline.derive(2, -1e-6f);
+
+    //for (int32_t i = 0; i < SamplePoints; i++) {
+    for (int32_t i = 0; i < knots.size(); ++i) {
+        float t = knots[i];
+
+        Eigen::Vector3f position = ToEigen(Spline.eval(t).resultVec3());
+        Eigen::Vector3f tangent = CalcTangent(Spline, t, 1.0f / float(SamplePoints) * 1e-2f);
+        Eigen::Vector3f normal = CalcNormal(Spline, t, 1.0f / float(SamplePoints) * 1e-2f);
+        //Eigen::Vector3f normal {0.f, 1.f, 0.f};
+
+        Result[i] = spline::FrenetFrame {
+            position,
+            tangent,
+            normal,
+            tangent.cross(normal).normalized(),
+        };
+    }
+
+    for (int32_t i = 1; i < Result.size() - 1; ++i) {
+        Result[i].Tangent = ((Result[i - 1].Tangent + Result[i].Tangent + Result[i + 1].Tangent) * 0.33333).normalized();
+        Result[i].Normal = ((Result[i - 1].Normal + Result[i].Normal + Result[i + 1].Normal) * 0.33333).normalized();
+        Result[i].Binormal = Result[i].Tangent.cross(Result[i].Normal).normalized();
+    }
+
+    return Result;
+}
+
+tinyspline::BSpline spline::Tension(const tinyspline::BSpline &Spline, float Beta) {
+    return Spline.tension(Beta);
+}
+
+Eigen::Vector3f spline::CalcTangent(const tinyspline::BSpline &Spline, float t, float delta) {
+    Eigen::Vector3f vec1 = ToEigen(Spline.eval(std::max(0.f, t - delta)).resultVec3());
+    Eigen::Vector3f vec2 = ToEigen(Spline.eval(std::min(1.f, t + delta)).resultVec3());
+
+    Eigen::Vector3f tangent = SAFE_DIV((vec2 - vec1), 2 * delta);
+    return tangent.normalized();
+}
+
+Eigen::Vector3f spline::CalcNormal(const tinyspline::BSpline &Spline, float t, float delta) {
+    Eigen::Vector3f tangent1 = CalcTangent(Spline, t);
+    Eigen::Vector3f tangent2 = CalcTangent(Spline, std::min(1.f, t + delta));
+
+    Eigen::Vector3f curvature = (tangent2 - tangent1) / delta;
+
+    Eigen::Vector3f normal = tangent1.cross(curvature);
+
+    return normal.normalized();
+}
+
+Eigen::Vector3f spline::CalcPosition(const tinyspline::BSpline &Spline, float t) {
+    return ToEigen(Spline.eval(t).resultVec3());
+}
+
+class tinyspline::BSpline spline::SubSpline(const tinyspline::BSpline &Spline, float a, float b) {
+    return Spline.subSpline(a, b);
 }

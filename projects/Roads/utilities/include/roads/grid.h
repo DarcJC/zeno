@@ -194,6 +194,13 @@ namespace roads {
     }// namespace energy
 
     namespace spline {
+        struct FrenetFrame {
+            Eigen::Vector3f Position;
+            Eigen::Vector3f Tangent;
+            Eigen::Vector3f Normal;
+            Eigen::Vector3f Binormal;
+        };
+
         //template<typename PointContainerType = ArrayList<std::array<float, 3>>, typename SegmentContainerType = std::array<int, 2>>
         class tinyspline::BSpline GenerateBSplineFromSegment(const ArrayList<std::array<float, 3>> &InPoints, const ArrayList<std::array<int, 2>> &Segments);
 
@@ -207,6 +214,20 @@ namespace roads {
         float FindNearestPointSA(const Eigen::Vector3d &Point, const tinyspline::BSpline &Spline);
 
         ArrayList<float> CalcRoadMask(const std::vector<std::array<float, 3>>& Points, const tinyspline::BSpline& SplineQwQ, float MaxDistance);
+
+        void BuildRoadMesh(size_t SampleCount, float RoadWidth, float RoadHeight, const tinyspline::BSpline& Spline, std::vector<std::array<float, 3>> &OutVertices, std::vector<std::array<int, 3>> &OutTriangles);
+
+        ArrayList<FrenetFrame> SampleFrenetFrame(const class tinyspline::BSpline& Spline, int32_t SamplePoints = 1000);
+
+        class tinyspline::BSpline Tension(const class tinyspline::BSpline& Spline, float Beta);
+
+        Eigen::Vector3f CalcPosition(const class tinyspline::BSpline& Spline, float t);
+
+        Eigen::Vector3f CalcTangent(const class tinyspline::BSpline& Spline, float t, float delta = 1e-3f);
+
+        Eigen::Vector3f CalcNormal(const class tinyspline::BSpline& Spline, float t, float delta = 1e-3f);
+
+        class tinyspline::BSpline SubSpline(const class tinyspline::BSpline& Spline, float a, float b);
     }// namespace spline
 
 }// namespace roads

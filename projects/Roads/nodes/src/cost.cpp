@@ -16,6 +16,7 @@
 #include <stack>
 
 #include "roads/thirdparty/tinysplinecxx.h"
+#include "zeno/funcs/PrimitiveUtils.h"
 
 template<typename... Args>
 inline void RoadsAssert(const bool Expr, const std::string &InMsg = "[Roads] Assert Failed", Args... args) {
@@ -463,6 +464,9 @@ namespace {
         int SampleNum = 1;
         ZENO_DECLARE_INPUT_FIELD(SampleNum, "Sample Points", false, "", "1000");
 
+        float Tension = 0.2;
+        ZENO_DECLARE_INPUT_FIELD(Tension, "Tension", false, "", "0.2");
+
         std::shared_ptr<zeno::RoadBSplineObject> Spline;
         ZENO_DECLARE_OUTPUT_FIELD(Spline, "Spline");
 
@@ -474,9 +478,12 @@ namespace {
 
             ROADS_TIMING_PRE_GENERATED;
             ROADS_TIMING_BLOCK("Spline Creation", auto Spline = spline::GenerateBSplineFromSegment(Vertices, Lines));
+
+            Spline = spline::Tension(Spline, AutoParameter->Tension);
+
             ROADS_TIMING_BLOCK("Resample segments", auto Result = spline::GenerateAndSamplePointsFromSegments(Spline, AutoParameter->SampleNum));
 
-            AutoParameter->Spline = std::make_shared<zeno::RoadBSplineObject>(Spline);
+            AutoParameter->Spline = std::make_shared<zeno::RoadBSplineObject>(std::move(Spline));
 
             Prim = std::make_shared<zeno::PrimitiveObject>();
 
@@ -626,6 +633,159 @@ namespace {
             for (int32_t i = 0; i < UpdatedHeightField.size(); ++i) {
                 if (0 != RoadMaskk[i])
                     PositionAttr[i][1] = UpdatedHeightField[i];
+            }
+        }
+    };
+
+    struct ZENO_CRTP(RoadMeshGenerate, zeno::reflect::IParameterAutoNode) {
+        ZENO_GENERATE_NODE_BODY(RoadMeshGenerate);
+
+        std::shared_ptr<zeno::RoadBSplineObject> Spline;
+        ZENO_DECLARE_INPUT_FIELD(Spline, "Spline");
+
+        std::shared_ptr<zeno::PrimitiveObject> Mesh;
+        ZENO_DECLARE_INPUT_FIELD(Mesh, "Mesh");
+
+        std::shared_ptr<zeno::PrimitiveObject> Primitive = std::make_shared<zeno::PrimitiveObject>();
+        ZENO_DECLARE_OUTPUT_FIELD(Primitive, "RoadMesh");
+
+        int Division;
+        ZENO_DECLARE_INPUT_FIELD(Division, "Division", false, "", "100000");
+
+        float Spacing;
+        ZENO_DECLARE_INPUT_FIELD(Spacing, "Spacing", false, "", "3.0");
+
+        int Tiles;
+        ZENO_DECLARE_INPUT_FIELD(Tiles, "Tiles", false, "", "30");
+
+//        float Height;
+//        ZENO_DECLARE_INPUT_FIELD(Height, "Height", false, "", "3.0");
+//
+//        std::string RoadChannel;
+//        ZENO_DECLARE_INPUT_FIELD(RoadChannel, "Road Distance Channel (Vert)", false, "", "roadMask");
+//
+//        std::string SizeXChannel;
+//        ZENO_DECLARE_INPUT_FIELD(SizeXChannel, "Nx Channel (UserData)", false, "", "nx");
+//
+//        std::string SizeYChannel;
+//        ZENO_DECLARE_INPUT_FIELD(SizeYChannel, "Ny Channel (UserData)", false, "", "ny");
+//
+//        int Nx = 0;
+//        ZENO_BINDING_PRIMITIVE_USERDATA(Mesh, Nx, SizeXChannel, false);
+//
+//        int Ny = 0;
+//        ZENO_BINDING_PRIMITIVE_USERDATA(Mesh, Ny, SizeYChannel, false);
+//
+//        zeno::AttrVector<float> RoadMask{};
+//        ZENO_BINDING_PRIMITIVE_ATTRIBUTE(Mesh, RoadMask, RoadChannel, zeno::reflect::EZenoPrimitiveAttr::VERT);
+
+        Vector3f GetTangent(const ArrayList<Vector3f>& pts, float t) {
+            float omt = 1.f - t;
+            float omt2 = omt * omt;
+            float t2 = t * t;
+            Vector3f tangent = pts[0] * (-omt2) +
+                pts[1] * (3 * omt2 - 2 * omt) +
+                pts[2] * (-3 * t2 + 2 * t) +
+                pts[3] * (t2);
+            return tangent.normalized();
+        }
+
+        Vector3f GetNormal2D(const ArrayList<Vector3f>& pts, float t) {
+            Vector3f tng = GetTangent(pts, t);
+            return Vector3f{ -tng.y(), tng.x(), .0f };
+        }
+
+        Vector3f GetNormal3D(const ArrayList<Vector3f>& pts, float t, const Vector3f& up) {
+            Vector3f tng = GetTangent(pts, t);
+            Vector3f binormal = up.cross(tng).normalized();
+            return tng.cross(binormal);
+        }
+
+        Eigen::Quaternionf LookAt(Eigen::Vector3f src, Eigen::Vector3f dest) {
+            Eigen::Vector3f forward = (dest - src).normalized();
+            Eigen::Vector3f up = Eigen::Vector3f::UnitY();
+
+            // If forward and up are nearly equal, we use the standard up vector
+            if ((forward - up).norm() < 0.01)
+                up = Eigen::Vector3f::UnitZ();
+
+            Eigen::Vector3f right = forward.cross(up).normalized();
+            up = right.cross(forward).normalized();
+
+            Eigen::Matrix3f rot;
+            rot.row(0) = right;
+            rot.row(1) = up;
+            rot.row(2) = -forward;
+
+            return Eigen::Quaternionf(rot);
+        }
+
+        Eigen::Quaternionf GetOrientation2D(const ArrayList<Vector3f>& pts, float t) {
+            Vector3f tng = GetTangent(pts, t);
+            Vector3f nrm = GetNormal2D(pts, t);
+            return LookAt(tng, nrm);
+        }
+
+        Eigen::Quaternionf GetOrientation3D(const ArrayList<Vector3f>& pts, float t, const Vector3f& up) {
+            Vector3f tng = GetTangent(pts, t);
+            Vector3f nrm = GetNormal3D(pts, t, up);
+            return LookAt(tng, nrm);
+
+        }
+
+        Vector3f TransformVertex(Vector3f MeshVertex) {
+            Vector3f SplinePoint;
+        }
+
+        float MapValueToRange(float x, float a, float b) {
+            return a + ((b - a) * x);
+        }
+
+        void apply() override {
+            Spacing = AutoParameter->Spacing;
+            Mesh = std::move(AutoParameter->Mesh);
+            Division = AutoParameter->Division;
+            Primitive = AutoParameter->Primitive;
+            Tiles = AutoParameter->Tiles;
+            //ArrayList<spline::FrenetFrame> Frames = spline::SampleFrenetFrame(AutoParameter->Spline->Spline, AutoParameter->Division);
+            float Division_inv = 1.f / float(Division);
+            float Tiles_inv = 1.f / float(Tiles);
+
+            auto [bmin_, bmax_] = zeno::primBoundingBox(Mesh.get());
+            Vector3f bmin {bmin_[0], bmin_[1], bmin_[2]};
+            Vector3f bmax {bmax_[0], bmax_[1], bmax_[2]};
+            Vector3f size = bmax - bmin;
+            Vector3f size_inv { 1.f / size.x(), 1.f / size.y(), 1.f / size.z() };
+
+            Primitive->verts.reserve(Mesh->verts->size() * Tiles);
+            Primitive->tris.resize(Mesh->tris->size() * Tiles);
+
+            for (int32_t TileIndex = 0; TileIndex < Tiles; ++TileIndex) {
+                auto sp = spline::SubSpline(AutoParameter->Spline->Spline, float(TileIndex) / float(Tiles), float(TileIndex + 1) / float(Tiles) );
+
+                size_t CurrentVertexNum = Primitive->verts.size();
+                for (int32_t vi = 0; vi < Mesh->verts.size(); ++vi) {
+                    Vector3f MeshVertex { Mesh->verts[vi][0], Mesh->verts[vi][1], Mesh->verts[vi][2] };
+                    // calc distance
+                    Vector3f Distance = MeshVertex - bmin;
+                    float dist = MapValueToRange(Distance.z() * size_inv.z(), TileIndex * Tiles_inv, (TileIndex + 1) * Tiles_inv);
+
+                    // get point at distance
+                    Vector3f SplinePoint = spline::CalcPosition(sp, dist);
+                    Vector3f FutureSplinePoint = spline::CalcPosition(sp, dist + Division_inv);
+                    Vector3f ForwardVector = FutureSplinePoint - SplinePoint;
+                    Quaternionf  ImaginaryPlaneRotation = LookAt(ForwardVector, Vector3f::UnitY());
+                    Vector3f PointWithinPlane { MeshVertex.x(), MeshVertex.y(), 0.f };
+
+                    // insert
+                    Vector3f ResultPoint = SplinePoint + ImaginaryPlaneRotation * PointWithinPlane;
+                    Primitive->verts.push_back({ ResultPoint.x(), ResultPoint.y(), ResultPoint.z() });
+                }
+
+                for (int32_t ti = 0; ti < Mesh->verts.size(); ++ti) {
+                    const auto& origin = Mesh->tris[ti];
+                    Primitive->tris[ti + CurrentVertexNum] = { static_cast<int>(origin[0]+CurrentVertexNum), static_cast<int>(origin[1]+CurrentVertexNum), static_cast<int>(origin[2]+CurrentVertexNum) };
+                }
             }
         }
     };
