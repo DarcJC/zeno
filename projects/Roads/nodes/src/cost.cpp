@@ -2,18 +2,25 @@
 #include "boost/geometry/index/rtree.hpp"
 #include "boost/graph/astar_search.hpp"
 #include "roads/roads.h"
+#include "openvdb/openvdb.h"
+#include "openvdb/tools/ParticlesToLevelSet.h"
+#include "openvdb/tools/TopologyToLevelSet.h"
+#include "openvdb/tools/MeshToVolume.h"
+#include "openvdb/tools/LevelSetSphere.h"
 #include "zeno/PrimitiveObject.h"
 #include "zeno/types/CurveObject.h"
 #include "zeno/types/UserData.h"
 #include "zeno/utils/PropertyVisitor.h"
 #include "zeno/utils/logger.h"
 #include "zeno/zeno.h"
+#include "zeno/VDBGrid.h"
 #include <Eigen/Core>
 #include <iostream>
 #include <limits>
 #include <numeric>
 #include <queue>
 #include <stack>
+#include <fstream>
 
 #include "roads/thirdparty/tinysplinecxx.h"
 #include "zeno/funcs/PrimitiveUtils.h"
@@ -648,12 +655,18 @@ namespace {
 
         std::shared_ptr<zeno::PrimitiveObject> Primitive = std::make_shared<zeno::PrimitiveObject>();
         ZENO_DECLARE_OUTPUT_FIELD(Primitive, "RoadMesh");
+//
+//        std::shared_ptr<zeno::VDBFloatGrid> SDF = zeno::IObject::make<VDBFloatGrid>();
+//        ZENO_DECLARE_OUTPUT_FIELD(SDF, "SDF");
 
         int Division;
         ZENO_DECLARE_INPUT_FIELD(Division, "Division", false, "", "100000");
 
         float Spacing;
-        ZENO_DECLARE_INPUT_FIELD(Spacing, "Spacing", false, "", "3.0");
+        ZENO_DECLARE_INPUT_FIELD(Spacing, "Width", false, "", "10.0");
+
+        float Height;
+        ZENO_DECLARE_INPUT_FIELD(Height, "Height", false, "", "3.0");
 
         int Tiles;
         ZENO_DECLARE_INPUT_FIELD(Tiles, "Tiles", false, "", "30");
@@ -738,55 +751,39 @@ namespace {
         }
 
         float MapValueToRange(float x, float a, float b) {
-            return a + ((b - a) * x);
+            return std::clamp(a + ((b - a) * x), a, b);
         }
 
         void apply() override {
-            Spacing = AutoParameter->Spacing;
-            Mesh = std::move(AutoParameter->Mesh);
-            Division = AutoParameter->Division;
-            Primitive = AutoParameter->Primitive;
-            Tiles = AutoParameter->Tiles;
-            //ArrayList<spline::FrenetFrame> Frames = spline::SampleFrenetFrame(AutoParameter->Spline->Spline, AutoParameter->Division);
-            float Division_inv = 1.f / float(Division);
-            float Tiles_inv = 1.f / float(Tiles);
+            zeno::log_error("Working in progress... You can export spline and import into Unreal Engine for now.");
+        }
+    };
 
-            auto [bmin_, bmax_] = zeno::primBoundingBox(Mesh.get());
-            Vector3f bmin {bmin_[0], bmin_[1], bmin_[2]};
-            Vector3f bmax {bmax_[0], bmax_[1], bmax_[2]};
-            Vector3f size = bmax - bmin;
-            Vector3f size_inv { 1.f / size.x(), 1.f / size.y(), 1.f / size.z() };
+    struct ZENO_CRTP(TinySplineExport, zeno::reflect::IParameterAutoNode) {
+        ZENO_GENERATE_NODE_BODY(TinySplineExport);
 
-            Primitive->verts.reserve(Mesh->verts->size() * Tiles);
-            Primitive->tris.resize(Mesh->tris->size() * Tiles);
+        std::shared_ptr<zeno::RoadBSplineObject> Spline;
+        ZENO_DECLARE_INPUT_FIELD(Spline, "Spline");
 
-            for (int32_t TileIndex = 0; TileIndex < Tiles; ++TileIndex) {
-                auto sp = spline::SubSpline(AutoParameter->Spline->Spline, float(TileIndex) / float(Tiles), float(TileIndex + 1) / float(Tiles) );
+        std::string OutputPath;
+        ZENO_DECLARE_INPUT_FIELD(OutputPath, "Output Path", false, "", "output.zespline");
 
-                size_t CurrentVertexNum = Primitive->verts.size();
-                for (int32_t vi = 0; vi < Mesh->verts.size(); ++vi) {
-                    Vector3f MeshVertex { Mesh->verts[vi][0], Mesh->verts[vi][1], Mesh->verts[vi][2] };
-                    // calc distance
-                    Vector3f Distance = MeshVertex - bmin;
-                    float dist = MapValueToRange(Distance.z() * size_inv.z(), TileIndex * Tiles_inv, (TileIndex + 1) * Tiles_inv);
-
-                    // get point at distance
-                    Vector3f SplinePoint = spline::CalcPosition(sp, dist);
-                    Vector3f FutureSplinePoint = spline::CalcPosition(sp, dist + Division_inv);
-                    Vector3f ForwardVector = FutureSplinePoint - SplinePoint;
-                    Quaternionf  ImaginaryPlaneRotation = LookAt(ForwardVector, Vector3f::UnitY());
-                    Vector3f PointWithinPlane { MeshVertex.x(), MeshVertex.y(), 0.f };
-
-                    // insert
-                    Vector3f ResultPoint = SplinePoint + ImaginaryPlaneRotation * PointWithinPlane;
-                    Primitive->verts.push_back({ ResultPoint.x(), ResultPoint.y(), ResultPoint.z() });
-                }
-
-                for (int32_t ti = 0; ti < Mesh->verts.size(); ++ti) {
-                    const auto& origin = Mesh->tris[ti];
-                    Primitive->tris[ti + CurrentVertexNum] = { static_cast<int>(origin[0]+CurrentVertexNum), static_cast<int>(origin[1]+CurrentVertexNum), static_cast<int>(origin[2]+CurrentVertexNum) };
-                }
+        void apply() override {
+            Spline = AutoParameter->Spline;
+            if (!Spline) {
+                zeno::log_error("Spline container is empty");
+                return;
             }
+            auto& s = Spline->Spline;
+            std::vector<std::array<float, 3>> ControlPoints(spline::NumControlPoints(s));
+            for (size_t i = 0; i < ControlPoints.size(); ++i) {
+                ControlPoints[i] = spline::ControlPoint3At(s, i);
+            }
+
+            std::ofstream FileOut;
+            FileOut.open(AutoParameter->OutputPath, std::ios::binary);
+            FileOut.write((char*)ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
+            FileOut.close();
         }
     };
 

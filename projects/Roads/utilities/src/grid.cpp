@@ -300,3 +300,12 @@ Eigen::Vector3f spline::CalcPosition(const tinyspline::BSpline &Spline, float t)
 class tinyspline::BSpline spline::SubSpline(const tinyspline::BSpline &Spline, float a, float b) {
     return Spline.subSpline(a, b);
 }
+
+size_t spline::NumControlPoints(const tinyspline::BSpline &Spline) {
+    return Spline.numControlPoints() / Spline.dimension();
+}
+
+std::array<float, 3> spline::ControlPoint3At(const tinyspline::BSpline &Spline, size_t index) {
+    auto s = Spline.controlPointVec3At(index);
+    return { s.x(), s.y(), s.z() };
+}

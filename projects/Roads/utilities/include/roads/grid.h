@@ -228,6 +228,10 @@ namespace roads {
         Eigen::Vector3f CalcNormal(const class tinyspline::BSpline& Spline, float t, float delta = 1e-3f);
 
         class tinyspline::BSpline SubSpline(const class tinyspline::BSpline& Spline, float a, float b);
+
+        size_t NumControlPoints(const class tinyspline::BSpline& Spline);
+
+        std::array<float, 3> ControlPoint3At(const class tinyspline::BSpline& Spline, size_t index);
     }// namespace spline
 
 }// namespace roads
