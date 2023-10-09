@@ -782,6 +782,13 @@ namespace {
 
             std::ofstream FileOut;
             FileOut.open(AutoParameter->OutputPath, std::ios::binary);
+            char Header[32] { 'z', 'e', 'n', 'o', '2', '0', '2', '0' };
+            static_assert(sizeof(uint64_t) == 8);
+            uint64_t* NumPointsPtr = (uint64_t*)(Header + sizeof("zeno2020"));
+            uint64_t* NumKnotPtr = (uint64_t*)(NumPointsPtr + sizeof(uint64_t));
+            *NumPointsPtr = ControlPoints.size();
+            *NumKnotPtr = 0; // Set to zero for now
+            FileOut.write(Header, sizeof(Header));
             FileOut.write((char*)ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
             FileOut.close();
         }
