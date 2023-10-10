@@ -759,8 +759,14 @@ namespace {
         }
     };
 
+    /**
+     * Export the spline control point that mapping into landscape space
+     */
     struct ZENO_CRTP(TinySplineExport, zeno::reflect::IParameterAutoNode) {
         ZENO_GENERATE_NODE_BODY(TinySplineExport);
+
+        std::shared_ptr<zeno::PrimitiveObject> Landscape;
+        ZENO_DECLARE_INPUT_FIELD(Landscape, "Landscape");
 
         std::shared_ptr<zeno::RoadBSplineObject> Spline;
         ZENO_DECLARE_INPUT_FIELD(Spline, "Spline");
@@ -770,25 +776,99 @@ namespace {
 
         void apply() override {
             Spline = AutoParameter->Spline;
+            Landscape = AutoParameter->Landscape;
             if (!Spline) {
                 zeno::log_error("Spline container is empty");
                 return;
             }
             auto& s = Spline->Spline;
+
+            auto& LastPoint = *(Landscape->verts.end() - 1);
+
             std::vector<std::array<float, 3>> ControlPoints(spline::NumControlPoints(s));
             for (size_t i = 0; i < ControlPoints.size(); ++i) {
-                ControlPoints[i] = spline::ControlPoint3At(s, i);
+                std::array<float, 3> Point = spline::ControlPoint3At(s, i);
+                ControlPoints[i] = { Point.at(0) - LastPoint.at(0), Point.at(1) - LastPoint.at(1), Point.at(2) - LastPoint.at(2) };
             }
 
             std::ofstream FileOut;
             FileOut.open(AutoParameter->OutputPath, std::ios::binary);
-            char Header[32] { 'z', 'e', 'n', 'o', '2', '0', '2', '0' };
+            unsigned char Header[32] { 'z', 'e', 'n', 'o', '2', '0', '2', '0' };
             static_assert(sizeof(uint64_t) == 8);
             uint64_t* NumPointsPtr = (uint64_t*)(Header + sizeof("zeno2020"));
             uint64_t* NumKnotPtr = (uint64_t*)(NumPointsPtr + sizeof(uint64_t));
+            zeno::log_info("Point Size: {}", ControlPoints.size());
             *NumPointsPtr = ControlPoints.size();
             *NumKnotPtr = 0; // Set to zero for now
-            FileOut.write(Header, sizeof(Header));
+            FileOut.write((char*)Header, sizeof(Header));
+            FileOut.write((char*)ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
+            FileOut.close();
+        }
+    };
+
+    /**
+     * Export the spline control point that mapping into landscape space
+     */
+    struct ZENO_CRTP(PrimLineExport, zeno::reflect::IParameterAutoNode) {
+        ZENO_GENERATE_NODE_BODY(PrimLineExport);
+
+        std::shared_ptr<zeno::PrimitiveObject> Landscape;
+        ZENO_DECLARE_INPUT_FIELD(Landscape, "Landscape");
+
+        std::shared_ptr<zeno::PrimitiveObject> Lines;
+        ZENO_DECLARE_INPUT_FIELD(Lines, "Lines");
+
+        int Step;
+        ZENO_DECLARE_INPUT_FIELD(Step, "Sample Step", false, "", "1");
+
+        std::string OutputPath;
+        ZENO_DECLARE_INPUT_FIELD(OutputPath, "Output Path", false, "", "output.zespline");
+
+        std::string SizeXChannel;
+        ZENO_DECLARE_INPUT_FIELD(SizeXChannel, "Nx Channel (UserData)", false, "", "nx");
+
+        int Nx = 0;
+        ZENO_BINDING_PRIMITIVE_USERDATA(Landscape, Nx, SizeXChannel, false);
+
+        void apply() override {
+            Lines = AutoParameter->Lines;
+            Landscape = AutoParameter->Landscape;
+            Step = AutoParameter->Step;
+            if (!Lines || !Landscape) {
+                zeno::log_error("Spline container is empty");
+                return;
+            }
+
+            // Origin
+            auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Landscape.get());
+            Vector3f BoundMin { BoundMin_[0], BoundMin_[1], BoundMin_[2] };
+            Vector3f BoundMax { BoundMax_[0], BoundMax_[1], BoundMax_[2] };
+            Vector3f OriginPoint = BoundMin;
+            Vector3f Center = (BoundMin + BoundMax) / 2;
+            Vector3f Size = BoundMax - BoundMin;
+            Size.y() = 1;
+
+            std::vector<std::array<float, 3>> ControlPoints;
+            ControlPoints.reserve(Lines->lines.size() / Step + 1);
+            for (size_t i = 0; i < Lines->lines.size(); i += Step) {
+                auto& Point_ = Lines->lines[i];
+                Vector3f Point { Lines->verts[Point_[0]][0], Lines->verts[Point_[0]][1], Lines->verts[Point_[0]][2] };
+                Point = ((Point - OriginPoint).array() / Size.array());
+                Point.x() *= float(AutoParameter->Nx);
+                Point.z() *= float(AutoParameter->Nx);
+                ControlPoints.push_back({ Point.x(), Point.y(), Point.z() });
+            }
+
+            std::ofstream FileOut;
+            FileOut.open(AutoParameter->OutputPath, std::ios::binary);
+            unsigned char Header[32] { 'z', 'e', 'n', 'o', '2', '0', '2', '0' };
+            static_assert(sizeof(uint64_t) == 8);
+            uint64_t* NumPointsPtr = (uint64_t*)(Header + sizeof("zeno2020"));
+            uint64_t* NumKnotPtr = (uint64_t*)(NumPointsPtr + sizeof(uint64_t));
+            zeno::log_info("Point Size: {}", ControlPoints.size());
+            *NumPointsPtr = ControlPoints.size();
+            *NumKnotPtr = 0; // Set to zero for now
+            FileOut.write((char*)Header, sizeof(Header));
             FileOut.write((char*)ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
             FileOut.close();
         }
