@@ -191,6 +191,64 @@ namespace roads {
                 }
             }
         }
+
+        // View
+        template <typename ValueType>
+        struct IArrayView {
+            virtual ValueType& ValueAt(size_t i) = 0;
+            virtual const ValueType& ValueAt(size_t i) const = 0;
+            virtual size_t Num() const = 0;
+            virtual size_t NumBytes() const = 0;
+
+            virtual ValueType& operator[](size_t i) = 0;
+            virtual const ValueType& operator[](size_t i) const = 0;
+        };
+
+        template<typename ContainerType, typename ValueType = ContainerType::value_type>
+        struct ArrayView : public IArrayView<ValueType> {
+            ArrayView(ContainerType& InContainer) : ContainerInternal(InContainer) {}
+
+            ValueType& ValueAt(size_t i) override { return ContainerInternal[i]; }
+            const ValueType& ValueAt(size_t i) const override { return ContainerInternal[i]; }
+
+            size_t Num() const override { return ContainerInternal.size(); }
+
+            size_t NumBytes() const override { return Num() * sizeof(ValueType); }
+
+            ValueType& operator[](size_t i) override { return ValueAt(i); }
+            virtual const ValueType& operator[](size_t i) const { return ValueAt(i); }
+        private:
+            ContainerType& ContainerInternal;
+        };
+
+        ArrayList<float> CalcSlope(const IArrayView<float>& Height, size_t Nx, size_t Ny);
+
+        template <typename T>
+        void RemapValueIntoRange(IArrayView<T>& ValueArray, const T& Minimum, const T& Maximum) {
+
+            T min = std::numeric_limits<T>::max(), max = std::numeric_limits<T>::min();
+
+#pragma omp parallel for shared(min)
+            for (int32_t i = 0; i < ValueArray.Num(); ++i) {
+#pragma omp critical
+                if (ValueArray[i] < min) {
+                    min = ValueArray[i];
+                }
+            }
+#pragma omp parallel for shared(max)
+            for (int32_t i = 0; i < ValueArray.Num(); ++i) {
+#pragma omp critical
+                if (ValueArray[i] > max) {
+                    max = ValueArray[i];
+                }
+            }
+
+#pragma omp parallel for
+            for (int32_t i = 0; i < ValueArray.Num(); ++i) {
+                ValueArray[i] = ((ValueArray[i] - min) / max) * Maximum + Minimum;
+            }
+        }
+
     }// namespace energy
 
     namespace spline {

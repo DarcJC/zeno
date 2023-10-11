@@ -309,3 +309,36 @@ std::array<float, 3> spline::ControlPoint3At(const tinyspline::BSpline &Spline, 
     auto s = Spline.controlPointVec3At(index);
     return { s.x(), s.y(), s.z() };
 }
+
+ArrayList<float> energy::CalcSlope(const energy::IArrayView<float> &Height, size_t Nx, size_t Ny) {
+    ArrayList<float> Slopes;
+    Slopes.resize(Nx * Ny);
+
+    size_t n = Ny, m = Nx;
+
+#pragma omp parallel for
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < m; ++j) {
+            size_t idx = i * m + j;
+
+            if (i < n - 1 && j < m - 1) [[likely]] {
+                float dx = Height[idx + 1] - Height[idx];
+                float dy = Height[idx + m] - Height[idx];
+
+                Slopes[idx] = std::sqrt(dx*dx+dy*dy);
+            } else {
+                if (i == n - 1) {
+                    Slopes[idx] = Slopes[idx - m];
+                }
+                if (j == m - 1) {
+                    Slopes[idx] = Slopes[idx - 1];
+                }
+            }
+        }
+    }
+
+    ArrayView<ArrayList<float>, float> View(Slopes);
+    RemapValueIntoRange<float>(View, 0.f, 1.f);
+
+    return Slopes;
+}

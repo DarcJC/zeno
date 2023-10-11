@@ -2,6 +2,7 @@
 #include "boost/geometry/index/rtree.hpp"
 #include "boost/graph/astar_search.hpp"
 #include "roads/roads.h"
+#include "roads/type.h"
 #include "openvdb/openvdb.h"
 #include "openvdb/tools/ParticlesToLevelSet.h"
 #include "openvdb/tools/TopologyToLevelSet.h"
@@ -128,7 +129,7 @@ namespace {
         ZENO_BINDING_PRIMITIVE_USERDATA(Primitive, Ny, SizeYChannel, false);
 
         std::string HeightChannel;
-        ZENO_DECLARE_INPUT_FIELD(HeightChannel, "Vert_PositionChannel", false, "", "pos");
+        ZENO_DECLARE_INPUT_FIELD(HeightChannel, "Vert_HeightChannel", false, "", "height");
 
         std::string OutputChannel;
         ZENO_DECLARE_INPUT_FIELD(OutputChannel, "Vert_OutputChannel", false, "", "gradient");
@@ -139,12 +140,8 @@ namespace {
         void apply() override {
             RoadsAssert(AutoParameter->Nx * AutoParameter->Ny <= AutoParameter->HeightList.size(), "Bad size in userdata! Check your nx ny.");
 
-            DynamicGrid<HeightPoint> HeightField(AutoParameter->Nx, AutoParameter->Ny);
-            for (size_t i = 0; i < HeightField.size(); ++i) {
-                HeightField[i] = AutoParameter->HeightList[i];
-            }
+            ArrayList<float> SlopeField = roads::energy::CalcSlope( energy::ArrayView<zeno::AttrVector<float>, float> { AutoParameter->HeightList }, AutoParameter->Nx, AutoParameter->Ny);
 
-            DynamicGrid<SlopePoint> SlopeField = CalculateSlope(HeightField);
             if (!AutoParameter->Primitive->verts.has_attr(AutoParameter->OutputChannel)) {
                 AutoParameter->Primitive->verts.add_attr<float>(AutoParameter->OutputChannel);
             }
