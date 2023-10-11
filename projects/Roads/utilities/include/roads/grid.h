@@ -27,8 +27,8 @@ namespace roads {
     struct CostPoint : std::array<size_t, 3> {
         CostPoint() = default;
 
-        CostPoint(size_t x, size_t y, size_t a = 0, double InHeight = 0.0, double InGradient = 0.0 /*, double InCurvature = 0.0**/)
-            : std::array<size_t, 3>(), Height(InHeight), Gradient(InGradient) {
+        CostPoint(size_t x, size_t y, size_t a = 0, double InHeight = 0.0, double InGradient = 0.0, double InAO = 0.0 /*, double InCurvature = 0.0**/)
+            : std::array<size_t, 3>(), Height(InHeight), Gradient(InGradient), AO(0.0) {
             at(0) = x;
             at(1) = y;
             at(2) = a;
@@ -40,6 +40,7 @@ namespace roads {
 
         double Height;
         double Gradient;// slope
+        double AO;
 
         // We need directional curvature, we cannot pre calculate it
         //double Curvature;
@@ -163,7 +164,7 @@ namespace roads {
                 }
                 Visual[Point] = 1;
 
-                //printf("-- P(%d,%d) %f\n", Point[0], Point[1], CostTo[Point]);
+                printf("-- P(%d,%d) %f\n", Point[0], Point[1], CostTo[Point]);
 
                 // extended mask for angle
                 for (size_t angle = 0; angle < MaskA; ++angle) {

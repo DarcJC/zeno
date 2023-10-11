@@ -1,27 +1,27 @@
 #include "boost/geometry.hpp"
 #include "boost/geometry/index/rtree.hpp"
 #include "boost/graph/astar_search.hpp"
-#include "roads/roads.h"
-#include "roads/type.h"
 #include "openvdb/openvdb.h"
+#include "openvdb/tools/LevelSetSphere.h"
+#include "openvdb/tools/MeshToVolume.h"
 #include "openvdb/tools/ParticlesToLevelSet.h"
 #include "openvdb/tools/TopologyToLevelSet.h"
-#include "openvdb/tools/MeshToVolume.h"
-#include "openvdb/tools/LevelSetSphere.h"
+#include "roads/roads.h"
+#include "roads/type.h"
 #include "zeno/PrimitiveObject.h"
+#include "zeno/VDBGrid.h"
 #include "zeno/types/CurveObject.h"
 #include "zeno/types/UserData.h"
 #include "zeno/utils/PropertyVisitor.h"
 #include "zeno/utils/logger.h"
 #include "zeno/zeno.h"
-#include "zeno/VDBGrid.h"
 #include <Eigen/Core>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <numeric>
 #include <queue>
 #include <stack>
-#include <fstream>
 
 #include "roads/thirdparty/tinysplinecxx.h"
 #include "zeno/funcs/PrimitiveUtils.h"
@@ -140,7 +140,7 @@ namespace {
         void apply() override {
             RoadsAssert(AutoParameter->Nx * AutoParameter->Ny <= AutoParameter->HeightList.size(), "Bad size in userdata! Check your nx ny.");
 
-            ArrayList<float> SlopeField = roads::energy::CalcSlope( energy::ArrayView<zeno::AttrVector<float>, float> { AutoParameter->HeightList }, AutoParameter->Nx, AutoParameter->Ny);
+            ArrayList<float> SlopeField = roads::energy::CalcSlope(energy::ArrayView<zeno::AttrVector<float>, float>{AutoParameter->HeightList}, AutoParameter->Nx, AutoParameter->Ny);
 
             if (!AutoParameter->Primitive->verts.has_attr(AutoParameter->OutputChannel)) {
                 AutoParameter->Primitive->verts.add_attr<float>(AutoParameter->OutputChannel);
@@ -201,6 +201,12 @@ namespace {
         std::string GradientChannel;
         ZENO_DECLARE_INPUT_FIELD(GradientChannel, "Gradient Channel (Vertex Attr)", false, "", "gradient");
 
+        std::string CurvatureChannel;
+        ZENO_DECLARE_INPUT_FIELD(CurvatureChannel, "Curvature Channel (Vertex Attr)", false, "", "curvature");
+
+        std::string AOChannel;
+        ZENO_DECLARE_INPUT_FIELD(AOChannel, "AO Channel (Vertex Attr)", false, "", "ao");
+
         //std::string CurvatureChannel;
         //ZENO_DECLARE_INPUT_FIELD(CurvatureChannel, "Curvature Channel (Vertex Attr)", false, "", "curvature");
 
@@ -222,14 +228,14 @@ namespace {
         zeno::vec2f Goal;
         ZENO_DECLARE_INPUT_FIELD(Goal, "Goal Point");
 
-        std::shared_ptr<zeno::CurveObject> HeightCurve = nullptr;
-        ZENO_DECLARE_INPUT_FIELD(HeightCurve, "Height Cost Control", true);
+        std::shared_ptr<zeno::CurveObject> AOCurve = nullptr;
+        ZENO_DECLARE_INPUT_FIELD(AOCurve, "AO Cost Curve", true);
 
         std::shared_ptr<zeno::CurveObject> GradientCurve = nullptr;
-        ZENO_DECLARE_INPUT_FIELD(GradientCurve, "Gradient Cost Control", true);
+        ZENO_DECLARE_INPUT_FIELD(GradientCurve, "Slope Cost Curve", true);
 
         std::shared_ptr<zeno::CurveObject> CurvatureCurve = nullptr;
-        ZENO_DECLARE_INPUT_FIELD(CurvatureCurve, "Curvature Cost Control", true);
+        ZENO_DECLARE_INPUT_FIELD(CurvatureCurve, "Curvature Cost Curve", true);
 
         bool bRemoveTriangles;
         ZENO_DECLARE_INPUT_FIELD(bRemoveTriangles, "Remove Triangles", false, "", "true");
@@ -245,6 +251,12 @@ namespace {
 
         zeno::AttrVector<float> GradientList{};
         ZENO_BINDING_PRIMITIVE_ATTRIBUTE(Primitive, GradientList, GradientChannel, zeno::reflect::EZenoPrimitiveAttr::VERT);
+
+        zeno::AttrVector<float> CurvatureList{};
+        ZENO_BINDING_PRIMITIVE_ATTRIBUTE(Primitive, CurvatureList, CurvatureChannel, zeno::reflect::EZenoPrimitiveAttr::VERT);
+
+        zeno::AttrVector<float> AOList{};
+        ZENO_BINDING_PRIMITIVE_ATTRIBUTE(Primitive, AOList, AOChannel, zeno::reflect::EZenoPrimitiveAttr::VERT);
 
         //zeno::AttrVector<float> CurvatureList{};
         //ZENO_BINDING_PRIMITIVE_ATTRIBUTE(Primitive, CurvatureList, CurvatureChannel, zeno::reflect::EZenoPrimitiveAttr::VERT);
@@ -281,7 +293,7 @@ namespace {
                 }
             };
 
-            auto HeightCostFunc = MapFuncGen(AutoParameter->HeightCurve, -1.0f);
+            auto AOCostFunc = MapFuncGen(AutoParameter->AOCurve, -1.0f);
             auto GradientCostFunc = MapFuncGen(AutoParameter->GradientCurve, -1.0f);
             auto CurvatureCostFunc = MapFuncGen(AutoParameter->CurvatureCurve, AutoParameter->CurvatureThreshold);
 
@@ -291,7 +303,7 @@ namespace {
             for (size_t i = 0; i < AutoParameter->Nx * AutoParameter->Ny; ++i) {
                 size_t x = i % AutoParameter->Nx;
                 size_t y = i / AutoParameter->Ny;
-                CostGrid[i] = (CostPoint{x, y, 0, AutoParameter->PositionList[i].at(1), AutoParameter->GradientList[i]});
+                CostGrid[i] = (CostPoint{x, y, 0, AutoParameter->PositionList[i].at(1), AutoParameter->GradientList[i], AutoParameter->AOList[i]});
             }
 
             auto CalcCurvature = [&CostGrid, Nx](const CostPoint &A, const CostPoint &B, const CostPoint &C) -> float {
@@ -310,21 +322,18 @@ namespace {
                 return Magnitude_Change / (Magnitude_BC * Magnitude_BC) * BC.z();
             };
 
+
             const size_t IndexMax = AutoParameter->Nx * AutoParameter->Ny - 1;
-            std::function<float(const CostPoint &, const CostPoint &)> CostFunc = [&CalcCurvature, &HeightCostFunc, &GradientCostFunc, &CurvatureCostFunc, &CostGrid, &Predecessor, IndexMax, Nx, Ny](const CostPoint &A, const CostPoint &B) mutable -> float {
+            std::function<float(const CostPoint &, const CostPoint &)> CostFunc = [&CalcCurvature, &AOCostFunc, &GradientCostFunc, &CurvatureCostFunc, &CostGrid, &Predecessor, IndexMax, Nx, Ny](const CostPoint &A, const CostPoint &B) mutable -> float {
                 size_t ia = A[0] + A[1] * Nx;
                 size_t ib = B[0] + B[1] * Nx;
-
-                //constexpr size_t Seed = 12306;
-                //size_t Hash = (ia + 0x9e3779b9 + (Seed << 4) + (Seed >> 2)) ^ (ib * 0x9e3779b9 + (Seed << 2) + (Seed >> 4));
 
                 // We assume that A already searched and have a predecessor
                 const CostPoint &PrevPoint = Predecessor[A];
 
-                // Calc curvature
                 float Curvature = CalcCurvature(PrevPoint, A, B);
 
-                float Cost = HeightCostFunc(float(std::abs(CostGrid[ia].Height - CostGrid[ib].Height))) + GradientCostFunc(float(std::abs(CostGrid[ia].Gradient - CostGrid[ib].Gradient))) + CurvatureCostFunc(float(std::abs(Curvature)));
+                float Cost = AOCostFunc(float(std::abs(CostGrid[ia].AO - CostGrid[ib].AO))) + GradientCostFunc(float(std::abs(CostGrid[ia].Gradient - CostGrid[ib].Gradient))) + CurvatureCostFunc(float(std::abs(Curvature)));
                 return Cost;
             };
 
@@ -531,10 +540,10 @@ namespace {
 
             std::vector<std::array<float, 3>> New(Points.begin(), Points.end());
 
-            tinyspline::BSpline& SplineQwQ = AutoParameter->Spline->Spline;
+            tinyspline::BSpline &SplineQwQ = AutoParameter->Spline->Spline;
             auto DistanceAttr = spline::CalcRoadMask(New, SplineQwQ, AutoParameter->MaxDistance);
 
-            auto& DisAttr = AutoParameter->Mesh->verts.add_attr<float>(AutoParameter->OutputChannel);
+            auto &DisAttr = AutoParameter->Mesh->verts.add_attr<float>(AutoParameter->OutputChannel);
             DisAttr.swap(DistanceAttr);
         }
     };
@@ -586,8 +595,8 @@ namespace {
             SlopeThreshold = AutoParameter->SlopeThreshold;
             OverThresholdWeightRatio = AutoParameter->OverThresholdWeightRatio;
 
-            zeno::AttrVector<zeno::vec3f>& PositionAttr = Mesh->verts;
-            zeno::AttrVector<float>& RoadMaskk = AutoParameter->RoadMask;
+            zeno::AttrVector<zeno::vec3f> &PositionAttr = Mesh->verts;
+            zeno::AttrVector<float> &RoadMaskk = AutoParameter->RoadMask;
 
             std::vector<float> UpdatedHeightField(PositionAttr.size());
 
@@ -610,10 +619,10 @@ namespace {
                                         float Slope = 0.0f;
 
                                         if (Distance > 1e-3) {
-                                            Slope = std::abs<float>(PositionAttr[y*Nx + x][1] - PositionAttr[ny*Nx + nx][1]) / Distance;
+                                            Slope = std::abs<float>(PositionAttr[y * Nx + x][1] - PositionAttr[ny * Nx + nx][1]) / Distance;
                                         }
 
-                                        float Weight = std::exp(-(dx*dx + dy*dy) / (2.0f * SmoothRadius * SmoothRadius));
+                                        float Weight = std::exp(-(dx * dx + dy * dy) / (2.0f * SmoothRadius * SmoothRadius));
 
                                         if (Slope > SlopeThreshold) {
                                             Weight *= OverThresholdWeightRatio;
@@ -652,9 +661,9 @@ namespace {
 
         std::shared_ptr<zeno::PrimitiveObject> Primitive = std::make_shared<zeno::PrimitiveObject>();
         ZENO_DECLARE_OUTPUT_FIELD(Primitive, "RoadMesh");
-//
-//        std::shared_ptr<zeno::VDBFloatGrid> SDF = zeno::IObject::make<VDBFloatGrid>();
-//        ZENO_DECLARE_OUTPUT_FIELD(SDF, "SDF");
+        //
+        //        std::shared_ptr<zeno::VDBFloatGrid> SDF = zeno::IObject::make<VDBFloatGrid>();
+        //        ZENO_DECLARE_OUTPUT_FIELD(SDF, "SDF");
 
         int Division;
         ZENO_DECLARE_INPUT_FIELD(Division, "Division", false, "", "100000");
@@ -668,44 +677,44 @@ namespace {
         int Tiles;
         ZENO_DECLARE_INPUT_FIELD(Tiles, "Tiles", false, "", "30");
 
-//        float Height;
-//        ZENO_DECLARE_INPUT_FIELD(Height, "Height", false, "", "3.0");
-//
-//        std::string RoadChannel;
-//        ZENO_DECLARE_INPUT_FIELD(RoadChannel, "Road Distance Channel (Vert)", false, "", "roadMask");
-//
-//        std::string SizeXChannel;
-//        ZENO_DECLARE_INPUT_FIELD(SizeXChannel, "Nx Channel (UserData)", false, "", "nx");
-//
-//        std::string SizeYChannel;
-//        ZENO_DECLARE_INPUT_FIELD(SizeYChannel, "Ny Channel (UserData)", false, "", "ny");
-//
-//        int Nx = 0;
-//        ZENO_BINDING_PRIMITIVE_USERDATA(Mesh, Nx, SizeXChannel, false);
-//
-//        int Ny = 0;
-//        ZENO_BINDING_PRIMITIVE_USERDATA(Mesh, Ny, SizeYChannel, false);
-//
-//        zeno::AttrVector<float> RoadMask{};
-//        ZENO_BINDING_PRIMITIVE_ATTRIBUTE(Mesh, RoadMask, RoadChannel, zeno::reflect::EZenoPrimitiveAttr::VERT);
+        //        float Height;
+        //        ZENO_DECLARE_INPUT_FIELD(Height, "Height", false, "", "3.0");
+        //
+        //        std::string RoadChannel;
+        //        ZENO_DECLARE_INPUT_FIELD(RoadChannel, "Road Distance Channel (Vert)", false, "", "roadMask");
+        //
+        //        std::string SizeXChannel;
+        //        ZENO_DECLARE_INPUT_FIELD(SizeXChannel, "Nx Channel (UserData)", false, "", "nx");
+        //
+        //        std::string SizeYChannel;
+        //        ZENO_DECLARE_INPUT_FIELD(SizeYChannel, "Ny Channel (UserData)", false, "", "ny");
+        //
+        //        int Nx = 0;
+        //        ZENO_BINDING_PRIMITIVE_USERDATA(Mesh, Nx, SizeXChannel, false);
+        //
+        //        int Ny = 0;
+        //        ZENO_BINDING_PRIMITIVE_USERDATA(Mesh, Ny, SizeYChannel, false);
+        //
+        //        zeno::AttrVector<float> RoadMask{};
+        //        ZENO_BINDING_PRIMITIVE_ATTRIBUTE(Mesh, RoadMask, RoadChannel, zeno::reflect::EZenoPrimitiveAttr::VERT);
 
-        Vector3f GetTangent(const ArrayList<Vector3f>& pts, float t) {
+        Vector3f GetTangent(const ArrayList<Vector3f> &pts, float t) {
             float omt = 1.f - t;
             float omt2 = omt * omt;
             float t2 = t * t;
             Vector3f tangent = pts[0] * (-omt2) +
-                pts[1] * (3 * omt2 - 2 * omt) +
-                pts[2] * (-3 * t2 + 2 * t) +
-                pts[3] * (t2);
+                               pts[1] * (3 * omt2 - 2 * omt) +
+                               pts[2] * (-3 * t2 + 2 * t) +
+                               pts[3] * (t2);
             return tangent.normalized();
         }
 
-        Vector3f GetNormal2D(const ArrayList<Vector3f>& pts, float t) {
+        Vector3f GetNormal2D(const ArrayList<Vector3f> &pts, float t) {
             Vector3f tng = GetTangent(pts, t);
-            return Vector3f{ -tng.y(), tng.x(), .0f };
+            return Vector3f{-tng.y(), tng.x(), .0f};
         }
 
-        Vector3f GetNormal3D(const ArrayList<Vector3f>& pts, float t, const Vector3f& up) {
+        Vector3f GetNormal3D(const ArrayList<Vector3f> &pts, float t, const Vector3f &up) {
             Vector3f tng = GetTangent(pts, t);
             Vector3f binormal = up.cross(tng).normalized();
             return tng.cross(binormal);
@@ -730,17 +739,16 @@ namespace {
             return Eigen::Quaternionf(rot);
         }
 
-        Eigen::Quaternionf GetOrientation2D(const ArrayList<Vector3f>& pts, float t) {
+        Eigen::Quaternionf GetOrientation2D(const ArrayList<Vector3f> &pts, float t) {
             Vector3f tng = GetTangent(pts, t);
             Vector3f nrm = GetNormal2D(pts, t);
             return LookAt(tng, nrm);
         }
 
-        Eigen::Quaternionf GetOrientation3D(const ArrayList<Vector3f>& pts, float t, const Vector3f& up) {
+        Eigen::Quaternionf GetOrientation3D(const ArrayList<Vector3f> &pts, float t, const Vector3f &up) {
             Vector3f tng = GetTangent(pts, t);
             Vector3f nrm = GetNormal3D(pts, t, up);
             return LookAt(tng, nrm);
-
         }
 
         Vector3f TransformVertex(Vector3f MeshVertex) {
@@ -781,13 +789,13 @@ namespace {
                 zeno::log_error("Spline container is empty");
                 return;
             }
-            auto& s = Spline->Spline;
+            auto &s = Spline->Spline;
 
             // Origin
             auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Landscape.get());
-            Vector3f BoundMin { BoundMin_[0], BoundMin_[1], BoundMin_[2] };
-            Vector3f BoundMax { BoundMax_[0], BoundMax_[1], BoundMax_[2] };
-            const Vector3f& OriginPoint = BoundMin;
+            Vector3f BoundMin{BoundMin_[0], BoundMin_[1], BoundMin_[2]};
+            Vector3f BoundMax{BoundMax_[0], BoundMax_[1], BoundMax_[2]};
+            const Vector3f &OriginPoint = BoundMin;
             Vector3f Center = (BoundMin + BoundMax) / 2;
             Vector3f Size = BoundMax - BoundMin;
             Size.y() = 1;
@@ -795,24 +803,24 @@ namespace {
             std::vector<std::array<float, 3>> ControlPoints(spline::NumControlPoints(s));
             for (size_t i = 0; i < ControlPoints.size(); ++i) {
                 std::array<float, 3> Point_ = spline::ControlPoint3At(s, i);
-                Vector3f Point { Point_[0], Point_[1], Point[2] };
+                Vector3f Point{Point_[0], Point_[1], Point[2]};
                 Point = ((Point - OriginPoint).array() / Size.array());
                 Point.x() *= float(AutoParameter->Nx);
                 Point.z() *= float(AutoParameter->Nx);
-                ControlPoints[i] = { Point.x(), Point.y(), Point.z()};
+                ControlPoints[i] = {Point.x(), Point.y(), Point.z()};
             }
 
             std::ofstream FileOut;
             FileOut.open(AutoParameter->OutputPath, std::ios::binary);
-            unsigned char Header[32] { 'z', 'e', 'n', 'o', '2', '0', '2', '0' };
+            unsigned char Header[32]{'z', 'e', 'n', 'o', '2', '0', '2', '0'};
             static_assert(sizeof(uint64_t) == 8);
-            uint64_t* NumPointsPtr = (uint64_t*)(Header + sizeof("zeno2020"));
-            uint64_t* NumKnotPtr = (uint64_t*)(NumPointsPtr + sizeof(uint64_t));
+            uint64_t *NumPointsPtr = (uint64_t *) (Header + sizeof("zeno2020"));
+            uint64_t *NumKnotPtr = (uint64_t *) (NumPointsPtr + sizeof(uint64_t));
             zeno::log_info("Point Size: {}", ControlPoints.size());
             *NumPointsPtr = ControlPoints.size();
-            *NumKnotPtr = 0; // Set to zero for now
-            FileOut.write((char*)Header, sizeof(Header));
-            FileOut.write((char*)ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
+            *NumKnotPtr = 0;// Set to zero for now
+            FileOut.write((char *) Header, sizeof(Header));
+            FileOut.write((char *) ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
             FileOut.close();
         }
     };
@@ -852,9 +860,9 @@ namespace {
 
             // Origin
             auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Landscape.get());
-            Vector3f BoundMin { BoundMin_[0], BoundMin_[1], BoundMin_[2] };
-            Vector3f BoundMax { BoundMax_[0], BoundMax_[1], BoundMax_[2] };
-            const Vector3f& OriginPoint = BoundMin;
+            Vector3f BoundMin{BoundMin_[0], BoundMin_[1], BoundMin_[2]};
+            Vector3f BoundMax{BoundMax_[0], BoundMax_[1], BoundMax_[2]};
+            const Vector3f &OriginPoint = BoundMin;
             Vector3f Center = (BoundMin + BoundMax) / 2;
             Vector3f Size = BoundMax - BoundMin;
             Size.y() = 1;
@@ -862,25 +870,25 @@ namespace {
             std::vector<std::array<float, 3>> ControlPoints;
             ControlPoints.reserve(Lines->lines.size() / Step + 1);
             for (size_t i = 0; i < Lines->lines.size(); i += Step) {
-                auto& Point_ = Lines->lines[i];
-                Vector3f Point { Lines->verts[Point_[0]][0], Lines->verts[Point_[0]][1], Lines->verts[Point_[0]][2] };
+                auto &Point_ = Lines->lines[i];
+                Vector3f Point{Lines->verts[Point_[0]][0], Lines->verts[Point_[0]][1], Lines->verts[Point_[0]][2]};
                 Point = ((Point - OriginPoint).array() / Size.array());
                 Point.x() *= float(AutoParameter->Nx);
                 Point.z() *= float(AutoParameter->Nx);
-                ControlPoints.push_back({ Point.x(), Point.y(), Point.z() });
+                ControlPoints.push_back({Point.x(), Point.y(), Point.z()});
             }
 
             std::ofstream FileOut;
             FileOut.open(AutoParameter->OutputPath, std::ios::binary);
-            unsigned char Header[32] { 'z', 'e', 'n', 'o', '2', '0', '2', '0' };
+            unsigned char Header[32]{'z', 'e', 'n', 'o', '2', '0', '2', '0'};
             static_assert(sizeof(uint64_t) == 8);
-            uint64_t* NumPointsPtr = (uint64_t*)(Header + sizeof("zeno2020"));
-            uint64_t* NumKnotPtr = (uint64_t*)(NumPointsPtr + sizeof(uint64_t));
+            uint64_t *NumPointsPtr = (uint64_t *) (Header + sizeof("zeno2020"));
+            uint64_t *NumKnotPtr = (uint64_t *) (NumPointsPtr + sizeof(uint64_t));
             zeno::log_info("Point Size: {}", ControlPoints.size());
             *NumPointsPtr = ControlPoints.size();
-            *NumKnotPtr = 0; // Set to zero for now
-            FileOut.write((char*)Header, sizeof(Header));
-            FileOut.write((char*)ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
+            *NumKnotPtr = 0;// Set to zero for now
+            FileOut.write((char *) Header, sizeof(Header));
+            FileOut.write((char *) ControlPoints.data(), ControlPoints.size() * sizeof(std::array<float, 3>));
             FileOut.close();
         }
     };
