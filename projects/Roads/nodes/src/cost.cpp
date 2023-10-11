@@ -774,6 +774,9 @@ namespace {
         std::string OutputPath;
         ZENO_DECLARE_INPUT_FIELD(OutputPath, "Output Path", false, "", "output.zespline");
 
+        int Nx;
+        ZENO_DECLARE_INPUT_FIELD(Nx, "Nx", false, "", "1000");
+
         void apply() override {
             Spline = AutoParameter->Spline;
             Landscape = AutoParameter->Landscape;
@@ -783,12 +786,23 @@ namespace {
             }
             auto& s = Spline->Spline;
 
-            auto& LastPoint = *(Landscape->verts.end() - 1);
+            // Origin
+            auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Landscape.get());
+            Vector3f BoundMin { BoundMin_[0], BoundMin_[1], BoundMin_[2] };
+            Vector3f BoundMax { BoundMax_[0], BoundMax_[1], BoundMax_[2] };
+            const Vector3f& OriginPoint = BoundMin;
+            Vector3f Center = (BoundMin + BoundMax) / 2;
+            Vector3f Size = BoundMax - BoundMin;
+            Size.y() = 1;
 
             std::vector<std::array<float, 3>> ControlPoints(spline::NumControlPoints(s));
             for (size_t i = 0; i < ControlPoints.size(); ++i) {
-                std::array<float, 3> Point = spline::ControlPoint3At(s, i);
-                ControlPoints[i] = { Point.at(0) - LastPoint.at(0), Point.at(1) - LastPoint.at(1), Point.at(2) - LastPoint.at(2) };
+                std::array<float, 3> Point_ = spline::ControlPoint3At(s, i);
+                Vector3f Point { Point_[0], Point_[1], Point[2] };
+                Point = ((Point - OriginPoint).array() / Size.array());
+                Point.x() *= float(AutoParameter->Nx);
+                Point.z() *= float(AutoParameter->Nx);
+                ControlPoints[i] = { Point.x(), Point.y(), Point.z()};
             }
 
             std::ofstream FileOut;
@@ -843,7 +857,7 @@ namespace {
             auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Landscape.get());
             Vector3f BoundMin { BoundMin_[0], BoundMin_[1], BoundMin_[2] };
             Vector3f BoundMax { BoundMax_[0], BoundMax_[1], BoundMax_[2] };
-            Vector3f OriginPoint = BoundMin;
+            const Vector3f& OriginPoint = BoundMin;
             Vector3f Center = (BoundMin + BoundMax) / 2;
             Vector3f Size = BoundMax - BoundMin;
             Size.y() = 1;
