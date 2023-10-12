@@ -799,9 +799,10 @@ namespace {
             auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Landscape.get());
             Vector3f BoundMin{BoundMin_[0], BoundMin_[1], BoundMin_[2]};
             Vector3f BoundMax{BoundMax_[0], BoundMax_[1], BoundMax_[2]};
-            const Vector3f &OriginPoint = BoundMin;
+            Vector3f OriginPoint = BoundMin;
             Vector3f Center = (BoundMin + BoundMax) / 2;
             Vector3f Size = BoundMax - BoundMin;
+            OriginPoint.y() = 0;
             Size.y() = 1;
 
             std::vector<std::array<float, 3>> ControlPoints(spline::NumControlPoints(s));
@@ -868,9 +869,10 @@ namespace {
             auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Landscape.get());
             Vector3f BoundMin{BoundMin_[0], BoundMin_[1], BoundMin_[2]};
             Vector3f BoundMax{BoundMax_[0], BoundMax_[1], BoundMax_[2]};
-            const Vector3f &OriginPoint = BoundMin;
+            Vector3f OriginPoint = BoundMin;
             Vector3f Center = (BoundMin + BoundMax) / 2;
             Vector3f Size = BoundMax - BoundMin;
+            OriginPoint.y() = 0;
             Size.y() = 1;
 
             std::vector<std::array<float, 3>> ControlPoints;
@@ -878,6 +880,7 @@ namespace {
             for (size_t i = 0; i < Lines->lines.size(); i += Step) {
                 auto &Point_ = Lines->lines[i];
                 Vector3f Point{Lines->verts[Point_[0]][0], Lines->verts[Point_[0]][1], Lines->verts[Point_[0]][2]};
+                //Point = Point - OriginPoint;
                 Point = ((Point - OriginPoint).array() / Size.array());
                 Point.x() *= float(AutoParameter->Nx);
                 Point.z() *= float(AutoParameter->Nx);
