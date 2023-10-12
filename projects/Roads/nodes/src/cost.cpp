@@ -222,6 +222,9 @@ namespace {
         float CurvatureThreshold;
         ZENO_DECLARE_INPUT_FIELD(CurvatureThreshold, "Curvature Threshold", false, "", "0.2");
 
+        float AngleCoefficient;
+        ZENO_DECLARE_INPUT_FIELD(AngleCoefficient, "Angle Coefficient", false, "", "1");
+
         zeno::vec2f Start;
         ZENO_DECLARE_INPUT_FIELD(Start, "Start Point");
 
@@ -272,7 +275,7 @@ namespace {
             DefaultedHashMap<CostPoint, CostPoint> Predecessor;
             DefaultedHashMap<CostPoint, float> CostMap;
 
-            size_t Nx = AutoParameter->Nx, Ny = AutoParameter->Ny;
+            size_t Nx = AutoParameter->Nx, Ny = AutoParameter->Ny, AngleMask = AutoParameter->AngleMask, AngleCoefficient = AutoParameter->AngleCoefficient;
 
             auto MapFuncGen = [](const std::shared_ptr<zeno::CurveObject> &Curve, float Threshold) -> std::function<float(float)> {
                 if (Curve) {
@@ -324,7 +327,7 @@ namespace {
 
 
             const size_t IndexMax = AutoParameter->Nx * AutoParameter->Ny - 1;
-            std::function<float(const CostPoint &, const CostPoint &)> CostFunc = [&CalcCurvature, &AOCostFunc, &GradientCostFunc, &CurvatureCostFunc, &CostGrid, &Predecessor, IndexMax, Nx, Ny](const CostPoint &A, const CostPoint &B) mutable -> float {
+            std::function<float(const CostPoint &, const CostPoint &)> CostFunc = [&CalcCurvature, &AOCostFunc, &GradientCostFunc, &CurvatureCostFunc, &CostGrid, &Predecessor, IndexMax, Nx, Ny, AngleMask, AngleCoefficient](const CostPoint &A, const CostPoint &B) mutable -> float {
                 size_t ia = A[0] + A[1] * Nx;
                 size_t ib = B[0] + B[1] * Nx;
 
@@ -332,8 +335,9 @@ namespace {
                 const CostPoint &PrevPoint = Predecessor[A];
 
                 float Curvature = CalcCurvature(PrevPoint, A, B);
+                float Angle = float(std::abs<size_t>(A.at(2) - B.at(2))) / float(AngleMask);
 
-                float Cost = AOCostFunc(float(std::abs(CostGrid[ia].AO - CostGrid[ib].AO))) + GradientCostFunc(float(std::abs(CostGrid[ia].Gradient - CostGrid[ib].Gradient))) + CurvatureCostFunc(float(std::abs(Curvature)));
+                float Cost = AOCostFunc(float(std::abs(CostGrid[ia].AO - CostGrid[ib].AO))) + GradientCostFunc(float(std::abs(CostGrid[ia].Gradient - CostGrid[ib].Gradient))) + CurvatureCostFunc(float(std::abs(Curvature))) + Angle * float(AngleCoefficient);
                 return Cost;
             };
 
@@ -807,7 +811,9 @@ namespace {
                 Point = ((Point - OriginPoint).array() / Size.array());
                 Point.x() *= float(AutoParameter->Nx);
                 Point.z() *= float(AutoParameter->Nx);
-                ControlPoints[i] = {Point.x(), Point.y(), Point.z()};
+                uint16_t yu16 = static_cast<uint16_t>(std::round(zeno::clamp(Point.y() * 128.f + 0x8000, 0, std::numeric_limits<uint16_t>::max())));
+                float yf = ((float) yu16 - 0x8000) * (1.f / 128.f);
+                ControlPoints[i] = {Point.x(), yf, Point.z()};
             }
 
             std::ofstream FileOut;
@@ -875,7 +881,9 @@ namespace {
                 Point = ((Point - OriginPoint).array() / Size.array());
                 Point.x() *= float(AutoParameter->Nx);
                 Point.z() *= float(AutoParameter->Nx);
-                ControlPoints.push_back({Point.x(), Point.y(), Point.z()});
+                uint16_t yu16 = static_cast<uint16_t>(std::round(zeno::clamp(Point.y() * 128.f + 0x8000, 0.f, float(std::numeric_limits<uint16_t>::max()))));
+                float yf = ((float) yu16 - 0x8000) * (1.f / 128.f);
+                ControlPoints.push_back({Point.x(), yf, Point.z()});
             }
 
             std::ofstream FileOut;
