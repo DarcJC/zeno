@@ -164,10 +164,10 @@ namespace roads {
                 }
                 Visual[Point] = 1;
 
-                printf("-- P(%d,%d) %f\n", Point[0], Point[1], CostTo[Point]);
+                printf("-- P(%d,%d) Cost: [%f] Angle: [%d]\n", Point[0], Point[1], CostTo[Point], Point[2]);
 
                 // extended mask for angle
-                for (size_t angle = 0; angle < MaskA; ++angle) {
+                for (size_t angle = 0; angle <= Point[2]; ++angle) {
                     // step3. for all points q ∈ M_k(p_ij)
                     for (int32_t dx = -MaskK; dx <= MaskK; ++dx) {
                         for (int32_t dy = -MaskK; dy <= MaskK; ++dy) {
