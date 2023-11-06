@@ -904,6 +904,70 @@ namespace {
         }
     };
 
+    struct ZENO_CRTP(PrimMaskLineVerts, zeno::reflect::IParameterAutoNode) {
+        ZENO_GENERATE_NODE_BODY(PrimMaskLineVerts);
+
+        std::shared_ptr<zeno::PrimitiveObject> Lines;
+        ZENO_DECLARE_INPUT_FIELD(Lines, "Prim");
+        ZENO_DECLARE_OUTPUT_FIELD(Lines, "Prim");
+
+        std::string MaskChannel;
+        ZENO_DECLARE_INPUT_FIELD(MaskChannel, "Mask Channel (Vert)", false, "", "line_mask");
+
+        void apply() override {
+            Lines = AutoParameter->Lines;
+            MaskChannel = AutoParameter->MaskChannel;
+
+            if (!Lines->verts.has_attr(MaskChannel)) {
+                Lines->verts.add_attr<float>(MaskChannel);
+            }
+
+            auto& Mask = Lines->verts.attr<float>(MaskChannel);
+
+            for (const auto& line : Lines->lines) {
+                Mask[line[0]]= Mask[line[1]] = 1;
+            }
+        }
+    };
+
+    struct ZENO_CRTP(LandscapeWorldToGridLocal, zeno::reflect::IParameterAutoNode) {
+        ZENO_GENERATE_NODE_BODY(LandscapeWorldToGridLocal);
+
+        std::shared_ptr<zeno::PrimitiveObject> Prim;
+        ZENO_DECLARE_INPUT_FIELD(Prim, "Landscape");
+
+        zeno::vec3f InputValue;
+        ZENO_DECLARE_INPUT_FIELD(InputValue, "World Position");
+
+        zeno::vec3f OutputValue;
+        ZENO_DECLARE_OUTPUT_FIELD(OutputValue, "Grid Local Position (Normalized)");
+
+        zeno::vec2f GridXY;
+        ZENO_DECLARE_OUTPUT_FIELD(GridXY, "Grid XY");
+
+        void apply() override {
+            Prim = AutoParameter->Prim;
+            InputValue = AutoParameter->InputValue;
+
+            auto [BoundMin_, BoundMax_] = zeno::primBoundingBox(Prim.get());
+            Vector3f BoundMin{BoundMin_[0], BoundMin_[1], BoundMin_[2]};
+            Vector3f BoundMax{BoundMax_[0], BoundMax_[1], BoundMax_[2]};
+            Vector3f OriginPoint = BoundMin;
+            Vector3f Center = (BoundMin + BoundMax) / 2;
+            Vector3f Size = BoundMax - BoundMin;
+            OriginPoint.y() = 0;
+            Size.y() = 1;
+
+            Vector3f Point { InputValue[0], InputValue[1], InputValue[2] };
+            Point = ((Point - OriginPoint).array() / Size.array());
+            uint16_t yu16 = static_cast<uint16_t>(std::round(zeno::clamp(Point.y() * 128.f + 0x8000, 0.f, float(std::numeric_limits<uint16_t>::max()))));
+            float yf = ((float) yu16 - 0x8000) * (1.f / 128.f);
+
+            AutoParameter->OutputValue = zeno::vec3f { Point.x(), yf, Point.z() };
+            AutoParameter->GridXY = zeno::vec2f { Point.x(), Point.z() };
+        }
+    };
+
 #if _MSC_VER
 #include "Windows.h"
     // Windows Debug
