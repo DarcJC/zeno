@@ -8,6 +8,8 @@ FIND_PACKAGE(Boost COMPONENTS graph)
 FILE(GLOB_RECURSE SOURCE_FILES src/*.cpp src/*.h src/thirdparty/parson.c src/thirdparty/tinyspline.c src/thirdparty/tinysplinecxx.cxx)
 
 ADD_LIBRARY(Roads STATIC ${SOURCE_FILES})
+#SET_TARGET_PROPERTIES(Roads PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON)
+TARGET_COMPILE_FEATURES(Roads PRIVATE cxx_std_23)
 
 TARGET_INCLUDE_DIRECTORIES(Roads PUBLIC include)
 TARGET_LINK_LIBRARIES(Roads PRIVATE Eigen3::Eigen)
@@ -38,7 +40,7 @@ ENDIF()
 IF (TARGET Boost::graph)
     TARGET_LINK_LIBRARIES(Roads PRIVATE Boost::graph)
 ELSE()
-    MESSAGE(FATAL_ERROR "Roads Module is depending on Boost::graph. You have to install it first.")
+    MESSAGE(FATAL_ERROR "Roads Module is depending on Boost::graph or Boost::asio. You have to install it first.")
 ENDIF()
 
 #TARGET_LINK_LIBRARIES(Roads PRIVATE TBB::tbb TBB::tbbmalloc)
