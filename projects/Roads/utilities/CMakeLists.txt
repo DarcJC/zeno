@@ -16,6 +16,7 @@ TARGET_LINK_LIBRARIES(Roads PRIVATE Eigen3::Eigen)
 
 ADD_EXECUTABLE(RoadsTest test/main.cpp)
 TARGET_LINK_LIBRARIES(RoadsTest PUBLIC Roads)
+TARGET_COMPILE_FEATURES(RoadsTest PRIVATE cxx_std_23)
 
 IF (OPENMP_FOUND)
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
@@ -39,6 +40,7 @@ ENDIF()
 
 IF (TARGET Boost::graph)
     TARGET_LINK_LIBRARIES(Roads PRIVATE Boost::graph)
+    TARGET_LINK_LIBRARIES(RoadsTest PRIVATE Boost::graph)
 ELSE()
     MESSAGE(FATAL_ERROR "Roads Module is depending on Boost::graph or Boost::asio. You have to install it first.")
 ENDIF()

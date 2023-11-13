@@ -5,7 +5,9 @@
 #endif
 #include <format>
 #include <filesystem>
+#include <iostream>
 #include <fstream>
+#include "roads/thirdparty/httplib.h"
 
 #include "roads/server.h"
 #define ZENO_LOAD_PATH
@@ -13,9 +15,8 @@
 #undef ZENO_LOAD_PATH
 
 namespace roads {
-    void StartRoadServer() {
-        using namespace std::chrono_literals;
-        // Get and check lock
+
+    void GetOutOfMyHouse() {
         std::string ZenoHome = std::format("{}/.zeno", service::GetUserHomeDirectory());
         std::filesystem::create_directories(ZenoHome);
         std::string LockFilePath = std::format("{}/.road_lock", ZenoHome);
@@ -29,81 +30,36 @@ namespace roads {
             InputStream.close();
             std::filesystem::remove(LockFilePath);
         }
+    }
+
+    void StartRoadServer() {
+        using namespace std::chrono_literals;
+        // Get and check lock
+        GetOutOfMyHouse();
 
         // Start server in new thread
-        static service::EventQueue Queue;
-        auto Handler = [] (std::istream& InStream) {
-            Queue.Enqueue(service::ParseRequest(InStream));
-        };
-        static service::Server Server(19990, Handler);
+        static std::optional<std::thread> ServerThread;
+        ServerThread = std::thread([] () {
+            httplib::Server Server;
 
-        static std::vector<std::thread> LocalPool;
-        size_t NumWorkers = 4;
-        for (size_t i = 0; i < NumWorkers; ++i) {
-            LocalPool.emplace_back([i] { service::ServerWorker(std::format("No.{}", i), Queue, 10s); } );
-        }
-        LocalPool.emplace_back([] { Server.RunFor(service::Clock::duration(std::numeric_limits<int64_t>::infinity())); });
+            Server.Post("/v0/zeno", [] (const httplib::Request& Request, httplib::Response& Response) {
+                Response.status = 404;
 
-        std::ofstream OutputStream { LockFilePath };
-        OutputStream << LocalPool.back().get_id() << std::endl;
-        OutputStream.close();
-    }
+                using namespace roads::service;
+                std::string RPCInputBuf = Request.body;
+                zpp::bits::in RPCInput {RPCInputBuf};
+                zpp::bits::out RPCOutput { Response.body };
+                rpc::server RPCServer { RPCInput, RPCOutput };
+                auto ResultServe = RPCServer.serve();
+                if (zpp::bits::success(ResultServe)) {
+                    Response.status = 200;
+                    Response.set_header("Content-Type", "application/x-zeno");
+                }
+            });
 
-    service::Session::Session(boost::asio::ip::tcp::socket &&SocketToMove, service::PostRequest Poster)
-        : m_Socket(std::move(SocketToMove))
-        , m_Poster(std::move(Poster))
-    {}
-
-    void service::Session::Process() {
-        std::shared_ptr<Session> Self = shared_from_this();
-        boost::asio::async_read(m_Socket, m_ReqBuffer, [this, Self] (boost::system::error_code ErrorCode, size_t) {
-            if (!ErrorCode || ErrorCode == boost::asio::error::eof) {
-                std::istream Reader(&m_ReqBuffer);
-                m_Poster(Reader);
-            }
+            Server.listen("0.0.0.0", 19990);
+            return 0;
         });
-    }
-
-    service::Server::Server(uint16_t Port, service::PostRequest Poster)
-        : m_Port(Port)
-        , m_Poster(std::move(Poster))
-    {}
-
-    void service::Server::RunFor(service::Clock::duration Duration) {
-        m_Timer.expires_from_now(Duration);
-        m_Timer.async_wait([this] (boost::system::error_code ErrorCode) {
-            if (!ErrorCode) m_IOService.post([this] { m_Acceptor.close(); });
-        });
-        m_Acceptor.listen();
-
-        DoAccept();
-
-        m_IOService.run();
-    }
-
-    void service::Server::DoAccept() {
-        m_Acceptor.async_accept(m_Socket, [this] (boost::system::error_code ErrorCode) {
-            if (!ErrorCode) {
-                std::make_shared<Session>(std::move(m_Socket), m_Poster)->Process();
-            }
-        });
-    }
-
-    service::Request service::ParseRequest(std::istream &is) {
-        Request NewRequest;
-        NewRequest.Data.assign(std::istream_iterator<uint8_t>(is), {});
-        return NewRequest;
-    }
-
-    void service::ServerWorker(std::string Name, service::EventQueue &Queue, service::Clock::duration Duration) {
-        auto const Deadline = Clock::now() + Duration;
-
-        while (true) try {
-            auto NewRequest = Queue.Dequeue(Deadline);
-            std::puts(std::format("Worker {} received request\n", Name).c_str());
-        } catch (std::exception const& Exception) {
-            std::puts(std::format("Worker {} got {}\n", Name, Exception.what()).c_str());
-        }
     }
 
     std::string service::GetUserHomeDirectory() {
@@ -134,37 +90,5 @@ namespace roads {
 #endif
     }
 
-    service::EventQueue::EventQueue(size_t MaxSize)
-        : m_MaxSize(MaxSize)
-    {}
 
-    void service::EventQueue::Enqueue(service::Request Req) {
-        std::unique_lock<std::mutex> Lock(m_Mutex);
-        m_ConditionVariable.wait(Lock, [this] { return size() < m_MaxSize; });
-        push_back(std::move(Req));
-        m_ConditionVariable.notify_one();
-    }
-
-    service::Request service::EventQueue::Dequeue(service::Clock::time_point Deadline) {
-        Request OutRequest;
-
-        {
-            std::unique_lock<std::mutex> Lock(m_Mutex);
-            m_Peak = std::max(m_Peak, size());
-            if (m_ConditionVariable.wait_until(Lock, Deadline, [this] { return !empty(); } )) {
-                OutRequest = std::move(front());
-                pop_front();
-                m_ConditionVariable.notify_one();
-            } else {
-                throw std::range_error("Failed to dequeue from queue within deadline.");
-            }
-        }
-
-        return OutRequest;
-    }
-
-    size_t service::EventQueue::PeakDepth() const {
-        std::lock_guard<std::mutex> Lock(m_Mutex);
-        return m_Peak;
-    }
 };

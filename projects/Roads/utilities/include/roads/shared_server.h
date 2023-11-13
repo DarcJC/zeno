@@ -6,10 +6,14 @@
 #include "zpp_bits.h";
 #endif
 
-namespace roads {
-    void TestFunc();
+namespace roads::service {
+    using namespace zpp::bits::literals;
 
-    class RoadRPCServer {
-    public:
-    };
+    int32_t TestFunc(int32_t i) {
+        return i + 1;
+    }
+
+    using rpc = zpp::bits::rpc<
+        zpp::bits::bind<TestFunc, "TestFunc"_sha256_int>
+    >;
 }
