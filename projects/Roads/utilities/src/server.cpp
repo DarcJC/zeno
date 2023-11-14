@@ -86,7 +86,8 @@ namespace roads {
         if (Handle) return TerminateProcess(Handle, 10);
         return true;
 #else
-        throw std::runtime_error("Kill Thread doesn't implemented on this platform.");
+        //throw std::runtime_error("Kill Thread doesn't implemented on this platform.");
+        #error "Kill Thread doesn't implemented on this platform."
 #endif
     }
 
