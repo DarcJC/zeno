@@ -90,12 +90,17 @@ namespace roads {
         #error "Kill Thread doesn't implemented on this platform."
 #endif
     }
-
 };
 
+bool FArchive::IsLoading() {
+    return false;
+}
+
+bool FArchive::IsSaving() { return false; }
+
 namespace roads::service {
-    int32_t FRemoteSubsystem::TestFunc(int32_t i) {
-        return IState += (i + 1);
+    FZenoTerrainData FRemoteSubsystem::TestFunc(int32_t i) {
+        return { i, i + 1, FStdFloatVector { { 10.f, 20.f, 30.f } } };
     }
 
     FRemoteSubsystem &FRemoteSubsystem::Get() {
