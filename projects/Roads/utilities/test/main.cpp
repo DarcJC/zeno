@@ -12,7 +12,7 @@ int main() {
 
     auto [data, in, out] = zpp::bits::data_in_out();
     rpc::client c { in, out};
-    c.request<"TestFunc"_sha256_int>(123).or_throw();
+    c.request<"TestFunc"_sha256_int>(100).or_throw();
     std::string converted;
     converted.resize(data.size());
     std::transform(std::begin(data), std::end(data), std::begin(converted), [] (std::byte b) {

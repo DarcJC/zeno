@@ -49,7 +49,7 @@ namespace roads {
                 std::string RPCInputBuf = Request.body;
                 zpp::bits::in RPCInput {RPCInputBuf};
                 zpp::bits::out RPCOutput { Response.body };
-                rpc::server RPCServer { RPCInput, RPCOutput };
+                rpc::server RPCServer { RPCInput, RPCOutput, FRemoteSubsystem::Get() };
                 auto ResultServe = RPCServer.serve();
                 if (zpp::bits::success(ResultServe)) {
                     Response.status = 200;
@@ -90,5 +90,15 @@ namespace roads {
 #endif
     }
 
-
 };
+
+namespace roads::service {
+    int32_t FRemoteSubsystem::TestFunc(int32_t i) {
+        return IState += (i + 1);
+    }
+
+    FRemoteSubsystem &FRemoteSubsystem::Get() {
+        static FRemoteSubsystem SRemoteSubsystem;
+        return SRemoteSubsystem;
+    }
+}
