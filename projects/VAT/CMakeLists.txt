@@ -5,6 +5,7 @@ set(VAT_SOURCE_FILES
 )
 set(VAT_HEADER_FILES
         Public/VATRigidBody.h
+        Public/VAT.h
 )
 
 target_sources(zeno PRIVATE ${VAT_SOURCE_FILES} ${VAT_HEADER_FILES})
